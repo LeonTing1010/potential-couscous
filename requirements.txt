@@ -1,0 +1,4 @@
+openai
+google-play-scraper
+APScheduler
+rich
