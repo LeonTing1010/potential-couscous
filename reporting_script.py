@@ -1,9 +1,9 @@
 import argparse
 import os
 import json
-import glob # For finding files
-from pathlib import Path # For easier path manipulation
-from datetime import datetime, timezone # For potentially parsing timestamps if needed beyond string sort
+import re # For sanitizing filenames
+from pathlib import Path 
+from datetime import datetime, timezone 
 
 from rich.console import Console
 from rich.table import Table
@@ -11,244 +11,285 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.padding import Padding
 from rich.rule import Rule
-from rich.layout import Group # For grouping renderables in Panel
+from rich.layout import Group 
 from rich.style import Style
+from rich.syntax import Syntax 
 
 # --- Constants ---
-ANALYSIS_OUTPUT_ROOT_DIR = "./all_app_analyses" # Root directory where analysis JSON files are stored
+APP_ANALYSIS_OUTPUT_ROOT_DIR = Path("./all_app_analyses") 
+FORUM_NLP_ANALYSIS_OUTPUT_ROOT_DIR = Path("./all_forum_nlp_analyses")
+PRODUCT_MENTIONS_OUTPUT_ROOT_DIR = Path("./all_product_mentions")
+KEYWORD_TRENDS_OUTPUT_ROOT_DIR = Path("./all_keyword_trends")
 
-# --- Helper Functions for File System Interaction ---
+# --- Helper Functions for File System Interaction (Generic) ---
 
-def get_analyzed_app_ids_from_fs(root_dir_path: Path) -> list[str]:
-    """
-    Scans the root analysis directory to find all app_ids that have analysis data.
-    Subdirectory names are assumed to be sanitized app_ids (underscores instead of dots).
-
-    Args:
-        root_dir_path: Path object for the root analysis directory.
-
-    Returns:
-        A list of unique app_id strings (unsanitized, with dots).
-    """
-    app_ids = []
-    if not root_dir_path.is_dir():
-        print(f"[FS_SCAN_WARN] Root analysis directory '{root_dir_path}' not found.")
-        return []
-    
-    for item in root_dir_path.iterdir():
-        if item.is_dir():
-            # Unsanitize directory name (e.g., com_example_app -> com.example.app)
-            app_id_original = item.name.replace('_', '.') 
-            app_ids.append(app_id_original)
-    
-    if not app_ids:
-        print(f"[FS_SCAN_INFO] No app analysis directories found in '{root_dir_path}'.")
-    return sorted(list(set(app_ids))) # Return sorted unique list
-
-def load_single_analysis_file(filepath: Path) -> dict | None:
-    """
-    Loads and parses a single JSON analysis file.
-
-    Args:
-        filepath: Path object for the JSON file.
-
-    Returns:
-        A dictionary with the analysis data, or None if loading/parsing fails.
-    """
+def load_single_json_file(filepath: Path) -> dict | None:
+    """Loads and parses a single JSON file."""
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        with open(filepath, 'r', encoding='utf-8') as f: data = json.load(f)
         return data
-    except json.JSONDecodeError:
-        print(f"[FILE_LOAD_ERROR] Failed to decode JSON from '{filepath}'. File might be corrupted.")
-        return None
-    except IOError:
-        print(f"[FILE_LOAD_ERROR] Could not read file '{filepath}'.")
-        return None
-    except Exception as e:
-        print(f"[FILE_LOAD_ERROR] An unexpected error occurred loading '{filepath}': {e}")
-        return None
+    except json.JSONDecodeError: print(f"[ERROR] JSON decode error in '{filepath}'."); return None
+    except IOError: print(f"[ERROR] IO error reading '{filepath}'."); return None
+    except Exception as e: print(f"[ERROR] Unexpected error loading '{filepath}': {e}"); return None
 
-def get_analysis_files_for_app_from_fs(
-    app_id_original: str, 
-    root_dir_path: Path, 
-    limit: int = 1, 
-    sort_descending: bool = True
-) -> list[dict]:
-    """
-    Retrieves analysis data for a specific app_id from its JSON files.
-    Sorts files by filename (timestamp part) to get latest/oldest.
+def _sanitize_filename_component(name: str, max_len: int = 50) -> str:
+    """Sanitizes a string to be used as a filename/directory component."""
+    s = name.lower(); s = re.sub(r'\s+', '_', s); s = re.sub(r'[^\w-]', '', s); return s[:max_len]
 
-    Args:
-        app_id_original: The original app_id (e.g., 'com.example.app').
-        root_dir_path: Path object for the root analysis directory.
-        limit: Max number of analysis documents to return.
-        sort_descending: True for newest first, False for oldest first.
+# --- App Review Analysis Helpers (from previous version) ---
+def get_analyzed_app_ids_from_fs(root_dir_path: Path) -> list[str]:
+    app_ids = []
+    if not root_dir_path.is_dir(): return []
+    for item in root_dir_path.iterdir():
+        if item.is_dir(): app_ids.append(item.name.replace('_', '.'))
+    return sorted(list(set(app_ids)))
 
-    Returns:
-        A list of loaded analysis dictionaries.
-    """
-    app_id_sanitized = app_id_original.replace('.', '_')
-    app_analysis_dir = root_dir_path / app_id_sanitized
+def get_analysis_files_for_app_from_fs(app_id_original: str, root_dir_path: Path, limit: int = 1, sort_descending: bool = True) -> list[dict]:
+    app_id_sanitized = app_id_original.replace('.', '_'); app_analysis_dir = root_dir_path / app_id_sanitized
+    if not app_analysis_dir.is_dir(): return []
+    json_files = sorted(list(app_analysis_dir.glob(f"{app_id_sanitized}_*.json")), key=lambda p: p.name, reverse=sort_descending)
+    return [data for filepath in json_files[:limit] if (data := load_single_json_file(filepath))]
 
-    if not app_analysis_dir.is_dir():
-        # This case is handled by the main logic checking if app_id exists in scanned list.
-        # print(f"[FS_APP_FILES_WARN] Analysis directory '{app_analysis_dir}' not found for app_id '{app_id_original}'.")
+# --- Forum NLP Analysis Helpers (from previous version) ---
+def get_analyzed_forum_platforms(nlp_root_dir: Path) -> list[str]:
+    platforms = []
+    if not nlp_root_dir.is_dir(): return []
+    for item in nlp_root_dir.iterdir():
+        if item.is_dir(): platforms.append(item.name)
+    return sorted(platforms)
+
+def get_analyzed_forum_ids_for_platform(platform_dir: Path) -> list[str]:
+    forum_ids = []
+    if not platform_dir.is_dir(): return []
+    for item in platform_dir.iterdir():
+        if item.is_dir(): forum_ids.append(item.name)
+    return sorted(forum_ids)
+
+def get_nlp_analysis_files_for_forum(forum_nlp_data_dir: Path, limit: int = 5) -> list[dict]:
+    if not forum_nlp_data_dir.is_dir(): return []
+    loaded_analyses = [data for filepath in forum_nlp_data_dir.glob("*_nlp.json") if (data := load_single_json_file(filepath)) and data.get("nlp_analysis_timestamp_utc")]
+    loaded_analyses.sort(key=lambda x: x["nlp_analysis_timestamp_utc"], reverse=True)
+    return loaded_analyses[:limit]
+
+# --- Product Mentions & Keyword Trends Helpers ---
+def get_product_mention_platforms_from_fs(mentions_root_dir: Path) -> list[str]:
+    platforms = []
+    if not mentions_root_dir.is_dir():
+        print(f"[FS_SCAN_WARN] Product mentions root directory '{mentions_root_dir}' not found.")
         return []
+    for item in mentions_root_dir.iterdir():
+        if item.is_dir(): platforms.append(item.name)
+    return sorted(platforms)
 
-    # Files are named like [app_id_sanitized]_[YYYYMMDDHHMMSSZ].json
-    # String sorting on filename works directly for recency due to this format.
-    json_files = sorted(
-        list(app_analysis_dir.glob(f"{app_id_sanitized}_*.json")),
-        key=lambda p: p.name, # Sort by filename string
-        reverse=sort_descending # Newest (largest timestamp string) first if True
-    )
+def get_product_mentions_by_platform(platform_dir: Path, limit: int = 5) -> list[dict]:
+    if not platform_dir.is_dir(): return []
+    product_files = list(platform_dir.glob("*.json"))
+    loaded_mentions = [data for filepath in product_files if (data := load_single_json_file(filepath)) and data.get("retrieved_utc")]
+    loaded_mentions.sort(key=lambda x: x["retrieved_utc"], reverse=True) # Sort by retrieval time
+    return loaded_mentions[:limit]
 
-    loaded_analyses = []
-    for filepath in json_files[:limit]: # Apply limit
-        data = load_single_analysis_file(filepath)
-        if data:
-            loaded_analyses.append(data)
+def get_trend_data_for_keyword(keyword_trends_root_dir: Path, keyword: str) -> dict | None:
+    sanitized_keyword_dir_name = _sanitize_filename_component(keyword)
+    keyword_dir = keyword_trends_root_dir / sanitized_keyword_dir_name
+    if not keyword_dir.is_dir():
+        print(f"[TRENDS_LOAD_INFO] No trend data directory found for keyword '{keyword}' (expected at '{keyword_dir}').")
+        return None
     
-    return loaded_analyses
-
-
-def display_analysis_document(analysis_doc: dict, console: Console):
-    """
-    Displays a single analysis document in a formatted way using Rich.
-    (Content mostly same, but ensuring keys match the JSON structure)
-    """
-    if not analysis_doc:
-        console.print("No analysis document provided to display.", style="yellow")
-        return
-
-    app_name = analysis_doc.get("app_name", "N/A")
-    app_id = analysis_doc.get("app_id", "N/A") # This should be in the JSON
-    timestamp = analysis_doc.get("analysis_timestamp_utc", "N/A")
+    trend_data = {"keyword": keyword}
+    trend_data["interest_over_time"] = load_single_json_file(keyword_dir / "interest_over_time.json")
+    trend_data["related_topics"] = load_single_json_file(keyword_dir / "related_topics.json")
+    trend_data["related_queries"] = load_single_json_file(keyword_dir / "related_queries.json")
     
-    # Expecting these to be in the JSON from app_analyzer_module
-    llm_model_used = analysis_doc.get("llm_model", analysis_doc.get("llm_model_used", "N/A")) # Fallback for older data
-    
-    scraper_params_dict = analysis_doc.get("scraper_parameters", {})
-    target_count = scraper_params_dict.get("reviews_fetched_target_count", "N/A")
-    actual_count = scraper_params_dict.get("reviews_fetched_actual_count", "N/A")
-    star_rating = scraper_params_dict.get("target_star_rating", "N/A")
-    scraper_parameters_info = f"Target: {target_count}, Actual: {actual_count}, Rating: {star_rating}-star"
-    source_type_info = analysis_doc.get("source_type", "N/A")
+    if not trend_data["interest_over_time"] and not trend_data["related_topics"] and not trend_data["related_queries"]:
+        print(f"[TRENDS_LOAD_WARN] No actual trend data files found for keyword '{keyword}' in '{keyword_dir}'.")
+        return None # No useful data found
+    return trend_data
 
+# --- Display Functions ---
+def display_app_review_analysis_document(analysis_doc: dict, console: Console):
+    # (Content from previous version - assumed correct and complete)
+    if not analysis_doc: console.print("No app review analysis document.",style="yellow"); return
+    app_name=analysis_doc.get("app_name","N/A");app_id=analysis_doc.get("app_id","N/A");ts=analysis_doc.get("analysis_timestamp_utc","N/A")
+    llm=analysis_doc.get("llm_model_used",analysis_doc.get("llm_model","N/A"));scraper=analysis_doc.get("scraper_parameters",{});src=analysis_doc.get("source_type","N/A")
+    scraper_info=f"Target:{scraper.get('reviews_fetched_target_count','N/A')},Actual:{scraper.get('reviews_fetched_actual_count','N/A')},Rating:{scraper.get('target_star_rating','N/A')}-star"
+    title=f"App Review: [bold cyan]{app_name}[/] ({app_id})";sub=f"Analyzed: {ts}";r_list=[Text.from_markup(f"[u]Summary:[/]\n{analysis_doc.get('analysis_summary','N/A')}\n",justify="full")]
+    pain=analysis_doc.get("identified_pain_points",[]);
+    if pain:
+        tbl=Table(title="Pain Points",header_style="gold3",expand=True);tbl.add_column("Summary",style="cyan",min_width=20);tbl.add_column("Snippets",min_width=30)
+        for p in pain: tbl.add_row(p.get("pain_point_summary","N/A"),Text("\n---\n").join([Text(f'"{s}"') for s in p.get("example_snippets",[])]) or "N/A")
+        r_list.extend([tbl,Text("")])
+    else: r_list.append(Text("No pain points identified.",style="italic"))
+    r_list.append(Text.from_markup(f"[b]LLM:[/b] {llm}\n[b]Scraper:[/b] {scraper_info}\n[b]Source:[/b] {src}"))
+    console.print(Panel(Padding(Group(*r_list),(1,2)),title=title,subtitle=sub,border_style="green",expand=False)); console.print()
 
-    title_text = f"Analysis for [bold cyan]{app_name}[/] ([italic blue]{app_id}[/])"
-    subtitle_text = f"Timestamp: {timestamp}"
+def display_forum_nlp_document(nlp_doc: dict, console: Console):
+    # (Content from previous version - assumed correct and complete)
+    if not nlp_doc: console.print("No forum NLP document.",style="yellow"); return
+    pid=nlp_doc.get("source_post_id","N/A");sub=nlp_doc.get("analyzed_subreddit","N/A");ts=nlp_doc.get("nlp_analysis_timestamp_utc","N/A")
+    llm=nlp_doc.get("llm_model_used","N/A") 
+    title=f"Forum NLP: [bold cyan]{sub}/t3_/{pid}[/]";sub_title=f"Analyzed: {ts}";r_list=[]
+    r_list.append(Text.from_markup(f"[u]Need/Problem:[/]\n{nlp_doc.get('primary_user_need_or_problem','N/A')}\n"))
+    r_list.append(Text.from_markup(f"[b]Topics:[/b] {', '.join(nlp_doc.get('key_topics_keywords',['N/A']))}\n"))
+    r_list.append(Text.from_markup(f"[b]Sentiment:[/b] {nlp_doc.get('sentiment_regarding_problem_or_need','N/A')}\n"))
+    pain=nlp_doc.get("pain_point_indicators_verbatim",[]);r_list.append(Text.from_markup(f"[u]Pain Indicators:[/]\n"+("\n".join([f"- \"{p}\"" for p in pain]) if pain else "[i]None identified.[/i]\n")))
+    sols=nlp_doc.get("suggested_solutions_from_comments",[])
+    if sols:
+        tbl=Table(title="Solutions",header_style="gold3",expand=True);tbl.add_column("Summary",style="cyan",min_width=20);tbl.add_column("Quote",min_width=30)
+        for s in sols: tbl.add_row(s.get("solution_summary","N/A"),s.get("verbatim_quote","N/A"))
+        r_list.extend([tbl,Text("")])
+    else: r_list.append(Text.from_markup("[u]Solutions:[/]\n[i]None identified.[/i]\n"))
+    r_list.append(Text.from_markup(f"[u]Discussion Summary:[/]\n{nlp_doc.get('overall_discussion_summary','N/A')}\n"))
+    if llm!="N/A":r_list.append(Text.from_markup(f"[b]LLM:[/b] {llm}"))
+    console.print(Panel(Padding(Group(*r_list),(1,2)),title=title,subtitle=sub_title,border_style="blue",expand=False)); console.print()
 
-    renderables_list = []
+def display_trends_report_document(console: Console, product_mention: dict | None, trend_data: dict | None):
+    if not trend_data or not trend_data.get("keyword"):
+        console.print("No trend data provided or keyword missing.", style="yellow"); return
 
-    # Using the updated key "analysis_summary"
-    summary = analysis_doc.get("analysis_summary", "No overall summary provided.")
-    renderables_list.append(Text.from_markup(f"[bold underline]Analysis Summary:[/]\n{summary}\n", justify="full"))
+    keyword = trend_data["keyword"]
+    title_text = f"Google Trends Analysis for Keyword: [bold magenta]{keyword}[/]"
+    renderables = []
 
-    pain_points = analysis_doc.get("identified_pain_points", [])
-    if pain_points:
-        table = Table(title="Identified Pain Points", title_style="bold magenta", show_header=True, header_style="bold gold3", expand=True, border_style="dim blue")
-        table.add_column("Pain Point Summary", style="cyan", min_width=30, overflow="fold")
-        table.add_column("Example Snippets", style="white", min_width=40, overflow="fold")
+    if product_mention:
+        pm_name = product_mention.get("product_name", "N/A")
+        pm_tagline = product_mention.get("tagline", "N/A")
+        pm_ph_url = product_mention.get("ph_url", "N/A")
+        pm_retrieved = product_mention.get("retrieved_utc", "N/A")
+        pm_panel = Panel(Text.from_markup(f"[b]Product Name:[/b] {pm_name}\n[b]Tagline:[/b] {pm_tagline}\n[b]PH URL:[/b] {pm_ph_url}\n[b]Discovered:[/b] {pm_retrieved}"),
+                         title="Matching Product Mention", border_style="dim cyan", expand=False)
+        renderables.append(pm_panel)
 
-        for point in pain_points:
-            point_summary = point.get("pain_point_summary", "N/A")
-            snippets_list = point.get("example_snippets", [])
-            if snippets_list:
-                snippets_text = Text("\n---\n", style="dim").join([Text(f'"{s}"') for s in snippets_list])
-            else:
-                snippets_text = Text("N/A", style="italic dim")
-            table.add_row(Text(point_summary, overflow="fold"), snippets_text)
-        renderables_list.append(table)
-        renderables_list.append(Text(""))
+    iot = trend_data.get("interest_over_time")
+    if iot and iot.get("date_points"):
+        dates = list(iot["date_points"].keys())
+        values = [v.get(keyword, 0) for v in iot["date_points"].values()] # Ensure keyword exists
+        summary = f"Data points: {len(dates)}. Min: {min(values) if values else 'N/A'}, Max: {max(values) if values else 'N/A'}. Partial data: {iot.get('isPartial', False)}"
+        renderables.append(Text.from_markup(f"\n[bold underline]Interest Over Time ({keyword}):[/]\n{summary}"))
+        # Could add a small bar chart here or more detailed table if needed.
     else:
-        renderables_list.append(Text("No specific pain points were identified in this analysis.", style="italic yellow"))
+        renderables.append(Text.from_markup(f"\n[bold underline]Interest Over Time ({keyword}):[/]\n[italic]No data available.[/italic]"))
+
+    for key in ["related_topics", "related_queries"]:
+        data_item = trend_data.get(key)
+        renderables.append(Text(f"\n[bold underline]{key.replace('_', ' ').title()}:[/]"))
+        if data_item and (data_item.get("top") or data_item.get("rising")):
+            for sub_key in ["top", "rising"]:
+                items = data_item.get(sub_key, [])
+                if items:
+                    table = Table(title=f"{sub_key.capitalize()} {key.replace('_', ' ').title()}", title_style="bold magenta" if sub_key == "rising" else "bold", show_header=True, header_style="bold yellow", expand=True)
+                    if key == "related_topics":
+                        table.add_column("Topic/Title", style="cyan"); table.add_column("Type", style="dim"); table.add_column("Value", style="green" if sub_key == "rising" else "white")
+                        for item in items: table.add_row(item.get("topic_title"), item.get("topic_type"), str(item.get("value")))
+                    else: # related_queries
+                        table.add_column("Query", style="cyan"); table.add_column("Value", style="green" if sub_key == "rising" else "white")
+                        for item in items: table.add_row(item.get("query"), str(item.get("value")))
+                    renderables.append(table)
+                else:
+                    renderables.append(Text(f"No {sub_key} {key.replace('_', ' ')} found.", style="italic"))
+        else:
+            renderables.append(Text(f"No {key.replace('_', ' ')} data available.", style="italic"))
     
-    meta_text_content = [
-        f"[bold]LLM Model Used:[/bold] {llm_model_used}",
-        f"[bold]Scraper Parameters:[/bold] {scraper_parameters_info}",
-        f"[bold]Source Type:[/bold] {source_type_info}"
-    ]
-    renderables_list.append(Text.from_markup("\n".join(meta_text_content)))
+    console.print(Panel(Padding(Group(*renderables), (1,2)), title=title_text, border_style="magenta", expand=False))
+    console.print()
 
-    panel_content_group = Group(*renderables_list)
-    console.print(Panel(Padding(panel_content_group, (1, 2)), 
-                        title=title_text, 
-                        subtitle=subtitle_text, 
-                        border_style="bright_green",
-                        expand=False)) 
-    console.print() 
-
+# --- Main ---
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate a console report of app review analyses from JSON files.",
-        formatter_class=argparse.RawTextHelpFormatter
-    )
-    parser.add_argument(
-        "--app_id", 
-        type=str, 
-        help="Report only for this specific app ID (e.g., 'com.example.app')."
-    )
-    parser.add_argument(
-        "--limit", 
-        type=int, 
-        default=1, 
-        help="Number of latest analyses to show per app (default: 1).\nMust be a positive integer."
-    )
+    parser = argparse.ArgumentParser(description="DemandRadar Reporting Script.", formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("--source_type", type=str, choices=['apps', 'forums', 'trends', 'all'], default='all',
+                        help="Data source: 'apps', 'forums', 'trends', 'all'. (default: 'all')")
+    parser.add_argument("--id", type=str, # Renamed from app_id for broader use
+                        help=("Specific ID. For 'apps': app_id (com.example.app).\n"
+                              "For 'forums': sanitized forum_id (r_SideProject).\n"
+                              "For 'trends': keyword/product name to report trends for."))
+    parser.add_argument("--limit", type=int, default=3, help="Max entries per item (default: 3).")
     args = parser.parse_args()
 
-    if args.limit <= 0:
-        console.print("[ERROR] --limit must be a positive integer.", style="bold red")
-        return
-
     console = Console()
-    console.print(Rule("[bold #FFD700]📱 App Review Analysis Report (File System) 📊[/bold #FFD700]", style="#FFBF00"))
+    title_suffix = f"({args.source_type.capitalize()})" if args.id else "(Overview)"
+    console.print(Rule(f"[bold #FFD700]📊 DemandRadar Report {title_suffix} 📊[/bold #FFD700]", style="#FFBF00"))
 
-    root_dir = Path(ANALYSIS_OUTPUT_ROOT_DIR)
+    if args.source_type in ['apps', 'all']:
+        console.print(Rule("[bold green]App Review Analyses[/]", style="green"))
+        app_root_dir = APP_ANALYSIS_OUTPUT_ROOT_DIR
+        ids_to_process = [args.id] if args.id and args.source_type == 'apps' else get_analyzed_app_ids_from_fs(app_root_dir)
+        if not ids_to_process and args.id : console.print(f"ℹ️ No analysis for app ID: [bold]{args.id}[/].", style="yellow")
+        elif not ids_to_process : console.print(f"ℹ️ No app analyses in '{app_root_dir}'.", style="yellow")
+        for app_id_str in ids_to_process:
+            if not (args.id and args.source_type == 'apps'): console.print(Rule(f"[bold #00BFFF]App: {app_id_str}[/]", style="#007FFF"))
+            analyses = get_analysis_files_for_app_from_fs(app_id_str, app_root_dir, limit=args.limit)
+            if analyses:
+                for doc in analyses: display_app_review_analysis_document(doc, console)
+            else: console.print(f"ℹ️ No analysis files for app ID: [bold]{app_id_str}[/].", style="italic yellow")
+        console.print()
 
-    try:
-        if args.app_id:
-            app_id_to_report = args.app_id
-            console.print(f"\n[INFO] Fetching analyses for app ID: [bold]{app_id_to_report}[/] (limit: {args.limit})...", style="cyan")
-            
-            # Check if directory for this specific app_id exists
-            sanitized_app_id_for_dir = app_id_to_report.replace('.', '_')
-            if not (root_dir / sanitized_app_id_for_dir).is_dir():
-                 console.print(f"ℹ️ No analysis directory found for app ID: [bold]{app_id_to_report}[/]. Ensure the app_id is correct and analyses have been run.", style="yellow")
+    if args.source_type in ['forums', 'all']:
+        console.print(Rule("[bold blue]Forum NLP Analyses[/]", style="blue"))
+        nlp_root = FORUM_NLP_ANALYSIS_OUTPUT_ROOT_DIR
+        if args.id and args.source_type == 'forums': # Assumes ID is platform/sanitized_forum_id e.g. reddit/r_SideProject
+            parts = args.id.split('/', 1); platform, forum_id = (parts[0], parts[1]) if len(parts)==2 else ("reddit", args.id) # Default platform
+            console.print(f"\n[INFO] Forum NLP for {platform}/{forum_id} (limit: {args.limit})...", style="cyan")
+            forum_dir = nlp_root / platform / forum_id
+            if not forum_dir.is_dir(): console.print(f"ℹ️ No NLP data for {platform}/{forum_id}.", style="yellow")
             else:
-                analyses = get_analysis_files_for_app_from_fs(app_id_to_report, root_dir, limit=args.limit)
-                if not analyses:
-                    console.print(f"ℹ️ No analysis files found for app ID: [bold]{app_id_to_report}[/] in its directory.", style="yellow")
-                else:
-                    console.print(f"Found {len(analyses)} analysis document(s) for [bold]{app_id_to_report}[/].")
-                    for doc in analyses:
-                        display_analysis_document(doc, console)
+                nlps = get_nlp_analysis_files_for_forum(forum_dir, limit=args.limit)
+                if nlps:
+                    for doc in nlps: display_forum_nlp_document(doc, console)
+                else: console.print(f"ℹ️ No NLP files for {platform}/{forum_id}.", style="italic yellow")
         else:
-            console.print(f"\n[INFO] Scanning for all analyzed app IDs in '{root_dir}'...", style="cyan")
-            distinct_app_ids = get_analyzed_app_ids_from_fs(root_dir)
-            if not distinct_app_ids:
-                console.print(f"ℹ️ No app analysis directories found in '{root_dir}'.", style="yellow")
+            platforms = get_analyzed_forum_platforms(nlp_root)
+            if not platforms: console.print(f"ℹ️ No forum platforms in '{nlp_root}'.", style="yellow")
+            for plat in platforms:
+                console.print(Rule(f"[bold #BA55D3]Platform: {plat}[/]", style="#8A2BE2"))
+                forum_ids = get_analyzed_forum_ids_for_platform(nlp_root / plat)
+                if not forum_ids: console.print(f"ℹ️ No forums for platform '{plat}'.", style="italic yellow")
+                for fid in forum_ids:
+                    console.print(Rule(f"[bold #6495ED]Forum: {fid}[/]", style="#4169E1"))
+                    nlps = get_nlp_analysis_files_for_forum(nlp_root / plat / fid, limit=args.limit)
+                    if nlps:
+                        for doc in nlps: display_forum_nlp_document(doc, console)
+                    else: console.print(f"ℹ️ No NLP files for forum ID: [bold]{fid}[/].", style="italic yellow")
+        console.print()
+
+    if args.source_type in ['trends', 'all']:
+        console.print(Rule("[bold magenta]Product Keyword Trends[/]", style="magenta"))
+        if args.id and args.source_type == 'trends': # ID is keyword
+            keyword = args.id
+            console.print(f"\n[INFO] Trends for keyword: [bold]{keyword}[/]...", style="cyan")
+            trend_data = get_trend_data_for_keyword(KEYWORD_TRENDS_OUTPUT_ROOT_DIR, keyword)
+            # Attempt to find a matching product mention (simple match on product_name)
+            product_mention_to_display = None
+            mention_platforms = get_product_mention_platforms_from_fs(PRODUCT_MENTIONS_OUTPUT_ROOT_DIR)
+            for plat in mention_platforms: # Search across all platforms for this keyword
+                mentions = get_product_mentions_by_platform(PRODUCT_MENTIONS_OUTPUT_ROOT_DIR / plat, limit=100) # Get more to search
+                for mention in mentions:
+                    if mention.get("product_name", "").lower() == keyword.lower():
+                        product_mention_to_display = mention; break
+                if product_mention_to_display: break
+            if trend_data or product_mention_to_display:
+                display_trends_report_document(console, product_mention_to_display, trend_data)
+            else: console.print(f"ℹ️ No trend data or product mention found for keyword: [bold]{keyword}[/].", style="yellow")
+        else: # List trends for a few recent product mentions
+            console.print(f"\n[INFO] Trends for {args.limit} most recent product mentions...", style="cyan")
+            recent_mentions_all_platforms = []
+            mention_platforms = get_product_mention_platforms_from_fs(PRODUCT_MENTIONS_OUTPUT_ROOT_DIR)
+            for plat in mention_platforms:
+                recent_mentions_all_platforms.extend(get_product_mentions_by_platform(PRODUCT_MENTIONS_OUTPUT_ROOT_DIR / plat, limit=args.limit))
+            # Sort all collected mentions by retrieved_utc to get overall recent ones
+            recent_mentions_all_platforms.sort(key=lambda x: x.get("retrieved_utc", ""), reverse=True)
+            
+            if not recent_mentions_all_platforms: console.print(f"ℹ️ No product mentions found in '{PRODUCT_MENTIONS_OUTPUT_ROOT_DIR}'.", style="yellow")
             else:
-                console.print(f"Found [bold]{len(distinct_app_ids)}[/] distinct app(s) with analysis data. Fetching reports (limit: {args.limit} per app)...")
-                for i, app_id_str in enumerate(distinct_app_ids):
-                    if i > 0: console.print() 
-                    console.print(Rule(f"[bold #ADD8E6]Reports for App ID: {app_id_str}[/bold #ADD8E6]", style="#007FFF"))
-                    analyses = get_analysis_files_for_app_from_fs(app_id_str, root_dir, limit=args.limit)
-                    if not analyses:
-                        console.print(f"ℹ️ No analysis files found for app ID: [bold]{app_id_str}[/]", style="italic yellow")
-                    else:
-                        console.print(f"Found {len(analyses)} analysis document(s) for [bold]{app_id_str}[/].")
-                        for doc in analyses:
-                            display_analysis_document(doc, console)
-    
-    except Exception as e:
-        console.print(f"[CRITICAL_ERROR] An unexpected error occurred during report generation: {type(e).__name__} - {e}", style="bold red")
-        import traceback
-        console.print(f"[TRACE]\n{traceback.format_exc()}", style="dim white")
-    finally:
-        console.print(Rule("[bold #FFBF00]Report Generation Finished[/bold #FFBF00]", style="#FFBF00"))
+                for i, mention in enumerate(recent_mentions_all_platforms[:args.limit]): # Show trends for top N overall recent mentions
+                    keyword = mention.get("product_name")
+                    if not keyword: continue
+                    console.print(Rule(f"[bold #D2691E]Keyword: {keyword}[/]", style="#A0522D")) # Chocolate/Sienna
+                    trend_data = get_trend_data_for_keyword(KEYWORD_TRENDS_OUTPUT_ROOT_DIR, keyword)
+                    display_trends_report_document(console, mention, trend_data)
+        console.print()
+
+    console.print(Rule("[bold #FFBF00]Report Generation Finished[/bold #FFBF00]", style="#FFBF00"))
 
 if __name__ == "__main__":
-    main()
+    try: main()
+    except Exception as e: console = Console(); console.print(f"[CRITICAL_ERROR] {e}",style="red"); import traceback; console.print(f"[TRACE]\n{traceback.format_exc()}",style="dim")
 ```

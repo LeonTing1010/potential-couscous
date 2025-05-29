@@ -17,11 +17,6 @@ def _construct_llm_prompt(reviews_texts: list[str], app_id: str, app_name: str) 
     """
     formatted_reviews = "\n".join([f"- \"{review}\"" for review in reviews_texts]) # Added quotes for clarity
 
-    # Note: The JSON structure below is part of the instruction to the LLM.
-    # It's crucial that the LLM adheres to this format.
-    # app_id and app_name are now dynamically inserted into the requested JSON structure.
-    # The key "overall_summary_of_1_star_reviews" is changed to "analysis_summary"
-    # and its description is updated.
     prompt = f"""
 You are an expert app review analyst. Analyze the following app reviews for the app named "{app_name}" (ID: "{app_id}"). 
 (Note: While the current examples are 1-star reviews, aim for a generally applicable analysis summary).
@@ -35,6 +30,7 @@ Based *only* on the reviews provided above, please perform the following tasks:
     a. Provide a concise summary (1-2 sentences) describing the pain point.
     b. List up to 3 short, verbatim snippets (direct quotes) from the provided reviews that clearly illustrate this pain point. If verbatim snippets are very long, you can use "..." to indicate omitted parts, but the core of the snippet must be verbatim.
 3. Provide an overall analysis summary of these reviews.
+4. List 3-5 main topics or keywords discussed across these reviews relevant to user feedback, features, or problems.
 
 Format your entire output as a single, valid JSON object. Do not include any explanatory text, headings, or markdown before or after the JSON object. The JSON object must strictly follow this structure:
 
@@ -57,7 +53,13 @@ Format your entire output as a single, valid JSON object. Do not include any exp
     }}
     // Add more pain point objects here as identified (up to 5)
   ],
-  "analysis_summary": "A brief general summary of the main themes and sentiment found in the analyzed reviews."
+  "analysis_summary": "A brief general summary of the main themes and sentiment found in the analyzed reviews.",
+  "key_topics_keywords": [
+    "keyword_or_topic1",
+    "keyword_or_topic2",
+    "keyword_or_topic3"
+    // List 3-5 as identified
+  ]
 }}
 
 Important considerations for your response:
@@ -66,6 +68,7 @@ Important considerations for your response:
 - Ensure all "example_snippets" are direct, verbatim quotes from the provided reviews.
 - If no relevant snippets are found for a pain point, provide an empty list [] for "example_snippets".
 - If no pain points can be clearly identified, the "identified_pain_points" list can be empty.
+- If no distinct topics/keywords are clear, the "key_topics_keywords" list can be empty.
 """
     return prompt
 
